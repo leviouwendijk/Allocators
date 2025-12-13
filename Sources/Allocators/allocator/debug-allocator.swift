@@ -37,9 +37,14 @@ public struct DebugAllocator<Base: Allocator>: Allocator, LeakCheckingAllocator 
         return ptr
     }
 
-    public func deallocate<T>(_ pointer: UnsafeMutablePointer<T>, capacity: Int) {
-        tracker.deallocateRecord(for: pointer, capacity: capacity)
-        base.deallocate(pointer, capacity: capacity)
+    public func deallocate<T>(_ pointer: UnsafeMutablePointer<T>) {
+        tracker.deallocateRecord(for: pointer, as: T.self)
+        base.deallocate(pointer)
+    }
+
+    public func clear<T>(_ pointer: UnsafeMutablePointer<T>, count: Int) {
+        tracker.deallocateRecord(for: pointer, as: T.self, count: count)
+        base.clear(pointer, count: count)
     }
 
     private struct Record {
@@ -69,7 +74,6 @@ public struct DebugAllocator<Base: Allocator>: Allocator, LeakCheckingAllocator 
             guard reportLeaksOnDeinit else { return }
             let report = leakReportLocked()
             guard report != nil else { return }
-
             fputs(report!, stderr)
         }
 
@@ -96,7 +100,8 @@ public struct DebugAllocator<Base: Allocator>: Allocator, LeakCheckingAllocator 
             )
         }
 
-        func deallocateRecord<T>(for pointer: UnsafeMutablePointer<T>, capacity: Int) {
+        /// Used by `clear(pointer,count:)` where we know how many elements the caller claims are valid.
+        func deallocateRecord<T>(for pointer: UnsafeMutablePointer<T>, as: T.Type, count: Int) {
             let key = UnsafeRawPointer(pointer)
 
             lock.lock()
@@ -108,9 +113,30 @@ public struct DebugAllocator<Base: Allocator>: Allocator, LeakCheckingAllocator 
 
             precondition(rec.alive, "double free on pointer \(pointer) (alloc #\(rec.allocationID))")
             precondition(
-                rec.capacity == capacity,
-                "deallocate: capacity mismatch (got \(capacity), expected \(rec.capacity)) (alloc #\(rec.allocationID))"
+                rec.type == T.self,
+                "deallocate: type mismatch (stored \(rec.type), deallocating as \(T.self)) (alloc #\(rec.allocationID))"
             )
+            precondition(
+                rec.capacity == count,
+                "clear: count/capacity mismatch (got \(count), expected \(rec.capacity)) (alloc #\(rec.allocationID))"
+            )
+
+            rec.alive = false
+            records[key] = rec
+        }
+
+        /// Used by `deallocate(pointer)` where capacity isn't available.
+        func deallocateRecord<T>(for pointer: UnsafeMutablePointer<T>, as: T.Type) {
+            let key = UnsafeRawPointer(pointer)
+
+            lock.lock()
+            defer { lock.unlock() }
+
+            guard var rec = records[key] else {
+                preconditionFailure("deallocate: unknown pointer \(pointer)")
+            }
+
+            precondition(rec.alive, "double free on pointer \(pointer) (alloc #\(rec.allocationID))")
             precondition(
                 rec.type == T.self,
                 "deallocate: type mismatch (stored \(rec.type), deallocating as \(T.self)) (alloc #\(rec.allocationID))"
@@ -170,13 +196,8 @@ public struct DebugAllocator<Base: Allocator>: Allocator, LeakCheckingAllocator 
         }
     }
 
-    public func hasLeaks() -> Bool {
-        tracker.hasLeaks()
-    }
-
-    public func leakReport() -> String? {
-        tracker.leakReport()
-    }
+    public func hasLeaks() -> Bool { tracker.hasLeaks() }
+    public func leakReport() -> String? { tracker.leakReport() }
 
     public func assertNoLeaks(
         file: StaticString = #file,
