@@ -1,6 +1,12 @@
 import Foundation
 
-public struct DebugAllocator<Base: Allocator> {
+public protocol LeakCheckingAllocator {
+    func hasLeaks() -> Bool
+    func leakReport() -> String?
+    func assertNoLeaks(file: StaticString, filePath: StaticString, line: UInt)
+}
+
+public struct DebugAllocator<Base: Allocator>: Allocator, LeakCheckingAllocator {
     public struct Options: Sendable {
         public var captureStackTraces: Bool
         public var reportLeaksOnDeinit: Bool
@@ -14,8 +20,27 @@ public struct DebugAllocator<Base: Allocator> {
         }
     }
 
-    private var base: Base
+    private let base: Base
     private let tracker: Tracker
+
+    public init(
+        base: Base,
+        options: Options = Options()
+    ) {
+        self.base = base
+        self.tracker = Tracker(options: options)
+    }
+
+    public func allocate<T>(_ type: T.Type, capacity: Int) -> UnsafeMutablePointer<T> {
+        let ptr = base.allocate(T.self, capacity: capacity)
+        tracker.allocateRecord(for: ptr, capacity: capacity)
+        return ptr
+    }
+
+    public func deallocate<T>(_ pointer: UnsafeMutablePointer<T>, capacity: Int) {
+        tracker.deallocateRecord(for: pointer, capacity: capacity)
+        base.deallocate(pointer, capacity: capacity)
+    }
 
     private struct Record {
         var capacity: Int
@@ -26,7 +51,7 @@ public struct DebugAllocator<Base: Allocator> {
         var stack: [String]?
     }
 
-    private final class Tracker {
+    private final class Tracker: @unchecked Sendable {
         private let lock = NSLock()
 
         private let captureStackTraces: Bool
@@ -45,7 +70,6 @@ public struct DebugAllocator<Base: Allocator> {
             let report = leakReportLocked()
             guard report != nil else { return }
 
-            // Don't crash in deinit; print loudly so tests/dev runs surface it.
             fputs(report!, stderr)
         }
 
@@ -132,7 +156,6 @@ public struct DebugAllocator<Base: Allocator> {
 
                 if let stack = rec.stack, !stack.isEmpty {
                     out += "  stack:\n"
-                    // Keep it readable; full stacks get noisy fast.
                     for line in stack.prefix(12) {
                         out += "    \(line)\n"
                     }
@@ -145,28 +168,6 @@ public struct DebugAllocator<Base: Allocator> {
             out += "\n[DebugAllocator] total leaked bytes (approx): \(totalBytes)\n\n"
             return out
         }
-    }
-
-    public init(base: Base, options: Options = Options()) {
-        self.base = base
-        self.tracker = Tracker(options: options)
-    }
-
-    public mutating func allocate<T>(
-        _ type: T.Type,
-        capacity: Int
-    ) -> UnsafeMutablePointer<T> {
-        let ptr = base.allocate(T.self, capacity: capacity)
-        tracker.allocateRecord(for: ptr, capacity: capacity)
-        return ptr
-    }
-
-    public mutating func deallocate<T>(
-        _ pointer: UnsafeMutablePointer<T>,
-        capacity: Int
-    ) {
-        tracker.deallocateRecord(for: pointer, capacity: capacity)
-        base.deallocate(pointer, capacity: capacity)
     }
 
     public func hasLeaks() -> Bool {
