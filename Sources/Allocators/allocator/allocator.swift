@@ -1,6 +1,6 @@
 import Foundation
 
-public protocol Allocator: Sendable {
+public protocol Allocator: Sendable, MemoryInspecting {
     func allocate<T>(
         _ type: T.Type,
         capacity: Int
