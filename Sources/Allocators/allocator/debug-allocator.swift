@@ -7,19 +7,6 @@ public protocol LeakCheckingAllocator {
 }
 
 public struct DebugAllocator<Base: Allocator>: Allocator, LeakCheckingAllocator {
-    public struct Options: Sendable {
-        public var captureStackTraces: Bool
-        public var reportLeaksOnDeinit: Bool
-
-        public init(
-            captureStackTraces: Bool = false,
-            reportLeaksOnDeinit: Bool = true
-        ) {
-            self.captureStackTraces = captureStackTraces
-            self.reportLeaksOnDeinit = reportLeaksOnDeinit
-        }
-    }
-
     private let base: Base
     private let tracker: Tracker
 
@@ -37,25 +24,36 @@ public struct DebugAllocator<Base: Allocator>: Allocator, LeakCheckingAllocator 
         return ptr
     }
 
+    public func deconstruct<T>(_ pointer: UnsafeMutablePointer<T>, count: Int) {
+        tracker.deconstructRecord(for: pointer, as: T.self, count: count)
+        base.deconstruct(pointer, count: count)
+    }
+
     public func deallocate<T>(_ pointer: UnsafeMutablePointer<T>) {
         tracker.deallocateRecord(for: pointer, as: T.self)
         base.deallocate(pointer)
     }
 
     public func clear<T>(_ pointer: UnsafeMutablePointer<T>, count: Int) {
-        tracker.deallocateRecord(for: pointer, as: T.self, count: count)
+        tracker.clearRecord(for: pointer, as: T.self, count: count)
         base.clear(pointer, count: count)
     }
 
-    private struct Record {
-        var capacity: Int
-        var stride: Int
-        var type: Any.Type
-        var alive: Bool
-        var allocationID: UInt64
-        var stack: [String]?
-    }
+    public func hasLeaks() -> Bool { tracker.hasLeaks() }
+    public func leakReport() -> String? { tracker.leakReport() }
 
+    public func assertNoLeaks(
+        file: StaticString = #file,
+        filePath: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        if let report = tracker.leakReport() {
+            preconditionFailure("\(report)\n[filePath: \(filePath)]", file: file, line: line)
+        }
+    }
+}
+
+extension DebugAllocator {
     private final class Tracker: @unchecked Sendable {
         private let lock = NSLock()
 
@@ -83,7 +81,7 @@ public struct DebugAllocator<Base: Allocator>: Allocator, LeakCheckingAllocator 
             lock.lock()
             defer { lock.unlock() }
 
-            if let existing = records[key], existing.alive {
+            if let existing = records[key], existing.state != .freed {
                 preconditionFailure("allocate: pointer reused without free? \(pointer)")
             }
 
@@ -94,34 +92,57 @@ public struct DebugAllocator<Base: Allocator>: Allocator, LeakCheckingAllocator 
                 capacity: capacity,
                 stride: MemoryLayout<T>.stride,
                 type: T.self,
-                alive: true,
+                state: .allocated,
                 allocationID: id,
                 stack: captureStackTraces ? Thread.callStackSymbols : nil
             )
         }
 
-        /// Used by `clear(pointer,count:)` where we know how many elements the caller claims are valid.
-        func deallocateRecord<T>(for pointer: UnsafeMutablePointer<T>, as: T.Type, count: Int) {
+        func clearRecord<T>(for pointer: UnsafeMutablePointer<T>, as: T.Type, count: Int) {
             let key = UnsafeRawPointer(pointer)
 
             lock.lock()
             defer { lock.unlock() }
 
             guard var rec = records[key] else {
-                preconditionFailure("deallocate: unknown pointer \(pointer)")
+                preconditionFailure("clear: unknown pointer \(pointer)")
             }
 
-            precondition(rec.alive, "double free on pointer \(pointer) (alloc #\(rec.allocationID))")
+            precondition(rec.state == .allocated, "clear: invalid state \(rec.state) (alloc #\(rec.allocationID))")
             precondition(
                 rec.type == T.self,
-                "deallocate: type mismatch (stored \(rec.type), deallocating as \(T.self)) (alloc #\(rec.allocationID))"
+                "clear: type mismatch (stored \(rec.type), clearing as \(T.self)) (alloc #\(rec.allocationID))"
             )
             precondition(
                 rec.capacity == count,
                 "clear: count/capacity mismatch (got \(count), expected \(rec.capacity)) (alloc #\(rec.allocationID))"
             )
 
-            rec.alive = false
+            rec.state = .freed
+            records[key] = rec
+        }
+
+        func deconstructRecord<T>(for pointer: UnsafeMutablePointer<T>, as: T.Type, count: Int) {
+            let key = UnsafeRawPointer(pointer)
+
+            lock.lock()
+            defer { lock.unlock() }
+
+            guard var rec = records[key] else {
+                preconditionFailure("deconstruct: unknown pointer \(pointer)")
+            }
+
+            precondition(rec.state == .allocated, "deconstruct: invalid state \(rec.state) (alloc #\(rec.allocationID))")
+            precondition(
+                rec.type == T.self,
+                "deconstruct: type mismatch (stored \(rec.type), deconstructing as \(T.self)) (alloc #\(rec.allocationID))"
+            )
+            precondition(
+                rec.capacity == count,
+                "deconstruct: count/capacity mismatch (got \(count), expected \(rec.capacity)) (alloc #\(rec.allocationID))"
+            )
+
+            rec.state = .deconstructed
             records[key] = rec
         }
 
@@ -136,20 +157,20 @@ public struct DebugAllocator<Base: Allocator>: Allocator, LeakCheckingAllocator 
                 preconditionFailure("deallocate: unknown pointer \(pointer)")
             }
 
-            precondition(rec.alive, "double free on pointer \(pointer) (alloc #\(rec.allocationID))")
+            precondition(rec.state != .freed, "double free on pointer \(pointer) (alloc #\(rec.allocationID))")
             precondition(
                 rec.type == T.self,
                 "deallocate: type mismatch (stored \(rec.type), deallocating as \(T.self)) (alloc #\(rec.allocationID))"
             )
 
-            rec.alive = false
+            rec.state = .freed
             records[key] = rec
         }
 
         func hasLeaks() -> Bool {
             lock.lock()
             defer { lock.unlock() }
-            return records.values.contains(where: { $0.alive })
+            return records.values.contains(where: { $0.state != .freed })
         }
 
         func leakReport() -> String? {
@@ -160,7 +181,7 @@ public struct DebugAllocator<Base: Allocator>: Allocator, LeakCheckingAllocator 
 
         private func leakReportLocked() -> String? {
             let leaks = records
-                .filter { $0.value.alive }
+                .filter { $0.value.state != .freed }
                 .sorted { $0.value.allocationID < $1.value.allocationID }
 
             guard !leaks.isEmpty else { return nil }
@@ -176,6 +197,7 @@ public struct DebugAllocator<Base: Allocator>: Allocator, LeakCheckingAllocator 
                 out += "\n- alloc #\(rec.allocationID)\n"
                 out += "  ptr: \(ptr)\n"
                 out += "  type: \(rec.type)\n"
+                out += "  state: \(rec.state)\n"
                 out += "  capacity: \(rec.capacity)\n"
                 out += "  stride: \(rec.stride)\n"
                 out += "  bytes: \(bytes)\n"
@@ -195,17 +217,43 @@ public struct DebugAllocator<Base: Allocator>: Allocator, LeakCheckingAllocator 
             return out
         }
     }
+}
 
-    public func hasLeaks() -> Bool { tracker.hasLeaks() }
-    public func leakReport() -> String? { tracker.leakReport() }
+extension DebugAllocator {
+    private enum LifeState: CustomStringConvertible {
+        case allocated
+        case deconstructed
+        case freed
 
-    public func assertNoLeaks(
-        file: StaticString = #file,
-        filePath: StaticString = #filePath,
-        line: UInt = #line
-    ) {
-        if let report = tracker.leakReport() {
-            preconditionFailure("\(report)\n[filePath: \(filePath)]", file: file, line: line)
+        var description: String {
+            switch self {
+            case .allocated: return "allocated"
+            case .deconstructed: return "deconstructed"
+            case .freed: return "freed"
+            }
+        }
+    }
+
+    private struct Record {
+        var capacity: Int
+        var stride: Int
+        var type: Any.Type
+        var state: LifeState
+        var allocationID: UInt64
+        var stack: [String]?
+    }
+
+
+    public struct Options: Sendable {
+        public var captureStackTraces: Bool
+        public var reportLeaksOnDeinit: Bool
+
+        public init(
+            captureStackTraces: Bool = false,
+            reportLeaksOnDeinit: Bool = true
+        ) {
+            self.captureStackTraces = captureStackTraces
+            self.reportLeaksOnDeinit = reportLeaksOnDeinit
         }
     }
 }
