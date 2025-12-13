@@ -59,6 +59,7 @@ extension DebugAllocator {
 
         private let captureStackTraces: Bool
         private let reportLeaksOnDeinit: Bool
+        private let keepFreedRecords: Bool
 
         private var nextAllocationID: UInt64 = 1
         private var records: [UnsafeRawPointer: Record] = [:]
@@ -66,6 +67,7 @@ extension DebugAllocator {
         init(options: Options) {
             self.captureStackTraces = options.captureStackTraces
             self.reportLeaksOnDeinit = options.reportLeaksOnDeinit
+            self.keepFreedRecords = options.keepFreedRecords
         }
 
         deinit {
@@ -118,8 +120,9 @@ extension DebugAllocator {
                 "clear: count/capacity mismatch (got \(count), expected \(rec.capacity)) (alloc #\(rec.allocationID))"
             )
 
-            rec.state = .freed
-            records[key] = rec
+            // rec.state = .freed
+            // records[key] = rec
+            markFreed(key, &rec)
         }
 
         func deconstructRecord<T>(for pointer: UnsafeMutablePointer<T>, as: T.Type, count: Int) {
@@ -163,8 +166,9 @@ extension DebugAllocator {
                 "deallocate: type mismatch (stored \(rec.type), deallocating as \(T.self)) (alloc #\(rec.allocationID))"
             )
 
-            rec.state = .freed
-            records[key] = rec
+            // rec.state = .freed
+            // records[key] = rec
+            markFreed(key, &rec)
         }
 
         func hasLeaks() -> Bool {
@@ -216,6 +220,15 @@ extension DebugAllocator {
             out += "\n[DebugAllocator] total leaked bytes (approx): \(totalBytes)\n\n"
             return out
         }
+
+        private func markFreed(_ key: UnsafeRawPointer, _ rec: inout Record) {
+            if keepFreedRecords {
+                rec.state = .freed
+                records[key] = rec
+            } else {
+                records.removeValue(forKey: key)
+            }
+        }
     }
 }
 
@@ -247,13 +260,16 @@ extension DebugAllocator {
     public struct Options: Sendable {
         public var captureStackTraces: Bool
         public var reportLeaksOnDeinit: Bool
+        public var keepFreedRecords: Bool
 
         public init(
             captureStackTraces: Bool = false,
-            reportLeaksOnDeinit: Bool = true
+            reportLeaksOnDeinit: Bool = true,
+            keepFreedRecords: Bool = true
         ) {
             self.captureStackTraces = captureStackTraces
             self.reportLeaksOnDeinit = reportLeaksOnDeinit
+            self.keepFreedRecords = keepFreedRecords
         }
     }
 }
