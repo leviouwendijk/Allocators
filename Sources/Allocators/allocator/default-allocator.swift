@@ -1,9 +1,8 @@
-import Foundation
+/// Default lightweight allocation capability.
+///
+/// Debug ownership is explicit rather than selected through conditional
+/// compilation so that allocator ownership and lifetime remain visible.
+public typealias DefaultAllocator = GenericAllocator
 
-#if ALLOC_DEBUG
-// compiles with .inspector.leaks(), .inspector.report() for memory leak inspection
-public typealias DefaultAllocator = DebugAllocator<GenericAllocator>
-#else
-// will currently compile the same call sites as DebugAllocator, but does not inspect:
-public typealias DefaultAllocator = GenericAllocator 
-#endif
+/// Convenience spelling for the standard debug-allocation owner.
+public typealias DefaultDebugAllocator = DebugAllocator<GenericAllocator>

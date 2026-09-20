@@ -1,13 +1,10 @@
-import Foundation
-
-/// Default allocator backed by `UnsafeMutablePointer.allocate` / `deallocate`.
-public struct GenericAllocator: Allocator {
+/// Stateless system allocator backed by `UnsafeMutablePointer.allocate` and
+/// `deallocate`.
+///
+/// This value is deliberately cheap and copyable. It carries allocation
+/// capability, not allocation ownership.
+public struct GenericAllocator: ConcurrentAllocator {
     public static let shared = GenericAllocator()
-    public var tracker: any AllocationTracking
 
-    public init(
-        options: AllocationTracker.Options = .init()
-    ) {
-        self.tracker = AllocationTracker(options: options)
-    }
+    public init() {}
 }

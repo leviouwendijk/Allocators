@@ -1,12 +1,7 @@
-import Foundation
-
-public protocol MemoryInspecting {
+/// Orthogonal inspection capability for allocator owners and other resources.
+///
+/// `~Copyable` allows uniquely owned resources such as `DebugAllocator` to
+/// conform without imposing copyability on the owner itself.
+public protocol MemoryInspecting: ~Copyable {
     var inspector: MemoryInspector { get }
-    var tracker: any AllocationTracking { get }
-}
-
-extension MemoryInspecting {
-    public var inspector: MemoryInspector { 
-        MemoryInspector(tracker: tracker) 
-    }
 }

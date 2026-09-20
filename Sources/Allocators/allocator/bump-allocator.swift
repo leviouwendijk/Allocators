@@ -1,81 +1,139 @@
-import Foundation
+/// Uniquely owned monotonic allocation domain.
+///
+/// `BumpAllocator` owns the allocation domain while `allocator` produces a
+/// cheap copyable capability suitable for passing through ordinary APIs.
+/// Individual deallocations do not release backing storage. The backing region
+/// is released when the owner and all outstanding allocator handles leave
+/// scope.
+///
+/// This first implementation is deliberately monotonic: it does not expose a
+/// reset operation, avoiding reuse of previously type-bound Swift memory until
+/// we define reset/rebinding semantics explicitly.
+public struct BumpAllocator: ~Copyable {
+    fileprivate final class State {
+        let base: UnsafeMutableRawPointer
+        let totalBytes: Int
+        let baseAlignment: Int
+        var offset: Int
 
-// do something for an arena / bump allocator here
-// problems with UnsafeMutableRawPointer not being sendable
-// class neither
-// struct requires mutability in the protocol
-// maybe a separate ArenaAllocator protocol
+        init(
+            totalBytes: Int,
+            alignment: Int
+        ) {
+            self.totalBytes = totalBytes
+            self.baseAlignment = alignment
+            self.offset = 0
+            self.base = UnsafeMutableRawPointer.allocate(
+                byteCount: totalBytes,
+                alignment: alignment
+            )
+        }
 
-// public struct BumpAllocator: Allocator {
-//     private let base: UnsafeMutableRawPointer
-//     private let totalBytes: Int
-//     private var offset: Int = 0
-//     private let baseAlignment: Int
+        deinit {
+            base.deallocate()
+        }
+    }
 
-//     public var usedBytes: Int { offset }
-//     public var remainingBytes: Int { totalBytes - offset }
+    private let state: State
 
-//     public init(
-//         totalBytes: Int,
-//         alignment: Int = MemoryLayout<UInt>.alignment
-//     ) {
-//         precondition(totalBytes > 0, "totalBytes must be > 0")
-//         precondition(alignment > 0 && alignment & (alignment - 1) == 0,
-//                      "alignment must be a power of two")
+    public init(
+        totalBytes: Int,
+        alignment: Int = 64
+    ) {
+        precondition(
+            totalBytes > 0,
+            "totalBytes must be greater than zero"
+        )
+        precondition(
+            alignment > 0 && alignment & (alignment - 1) == 0,
+            "alignment must be a power of two"
+        )
 
-//         self.totalBytes = totalBytes
-//         self.baseAlignment = alignment
-//         self.base = UnsafeMutableRawPointer.allocate(
-//             byteCount: totalBytes,
-//             alignment: alignment
-//         )
-//     }
+        self.state = State(
+            totalBytes: totalBytes,
+            alignment: alignment
+        )
+    }
 
-//     /// Must be called exactly once to free the arena storage.
-//     public func shutdown() {
-//         base.deallocate()
-//     }
+    public var allocator: Handle {
+        Handle(state: state)
+    }
 
-//     public mutating func allocate<T>(
-//         _ type: T.Type,
-//         capacity: Int
-//     ) -> UnsafeMutablePointer<T> {
-//         precondition(capacity >= 0, "capacity must be non-negative")
+    public var usedBytes: Int {
+        state.offset
+    }
 
-//         let alignment = MemoryLayout<T>.alignment
-//         let stride = MemoryLayout<T>.stride
-//         let bytesNeeded = capacity &> 0 ? capacity &* stride : 0
+    public var remainingBytes: Int {
+        state.totalBytes - state.offset
+    }
+}
 
-//         let alignedOffset = align(offset, to: alignment)
+public extension BumpAllocator {
+    /// Copyable, non-Sendable allocation capability into one bump domain.
+    struct Handle: Allocator {
+        fileprivate let state: State
 
-//         precondition(
-//             alignedOffset &+ bytesNeeded <= totalBytes,
-//             "BumpAllocator out of memory: requested \(bytesNeeded) bytes, " +
-//             "only \(totalBytes - alignedOffset) bytes remaining"
-//         )
+        fileprivate init(state: State) {
+            self.state = state
+        }
 
-//         let raw = base.advanced(by: alignedOffset)
-//         let typed = raw.bindMemory(to: T.self, capacity: capacity)
+        public func allocate<T>(
+            _ type: T.Type,
+            capacity: Int
+        ) -> UnsafeMutablePointer<T> {
+            precondition(
+                capacity > 0,
+                "BumpAllocator requires capacity greater than zero"
+            )
 
-//         offset = alignedOffset &+ bytesNeeded
-//         return typed
-//     }
+            let typeAlignment = MemoryLayout<T>.alignment
+            precondition(
+                typeAlignment <= state.baseAlignment,
+                "requested type alignment exceeds bump allocator base alignment"
+            )
 
-//     public mutating func deallocate<T>(
-//         _ pointer: UnsafeMutablePointer<T>,
-//         capacity: Int
-//     ) {
-//         pointer.deinitialize(count: capacity)
-//         // Raw bytes stay in arena.
-//     }
+            let (bytesNeeded, byteOverflow) = capacity.multipliedReportingOverflow(
+                by: MemoryLayout<T>.stride
+            )
+            precondition(
+                !byteOverflow,
+                "requested allocation size overflowed Int"
+            )
 
-//     public mutating func reset() {
-//         offset = 0
-//     }
+            let mask = typeAlignment - 1
+            let (offsetWithMask, alignmentOverflow) = state.offset.addingReportingOverflow(mask)
+            precondition(
+                !alignmentOverflow,
+                "requested aligned offset overflowed Int"
+            )
 
-//     @inline(__always)
-//     private func align(_ value: Int, to alignment: Int) -> Int {
-//         let mask = alignment - 1
-//         return (value + mask) & ~mask
-//     }
-// }
+            let alignedOffset = offsetWithMask & ~mask
+            let (endOffset, endOverflow) = alignedOffset.addingReportingOverflow(bytesNeeded)
+
+            precondition(
+                !endOverflow && endOffset <= state.totalBytes,
+                "BumpAllocator out of memory: requested \(bytesNeeded) bytes, \(state.remainingBytes(from: alignedOffset)) bytes remain"
+            )
+
+            let raw = state.base.advanced(by: alignedOffset)
+            let pointer = raw.bindMemory(
+                to: T.self,
+                capacity: capacity
+            )
+
+            state.offset = endOffset
+            return pointer
+        }
+
+        /// Monotonic allocations are not individually released.
+        public func deallocate<T>(
+            _ pointer: UnsafeMutablePointer<T>
+        ) {}
+    }
+}
+
+private extension BumpAllocator.State {
+    func remainingBytes(from offset: Int) -> Int {
+        totalBytes - offset
+    }
+}
