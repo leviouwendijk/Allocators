@@ -70,8 +70,16 @@ package enum TestAllocators {
                 body: testBufferHandleViews
             ),
             .init(
-                name: "explicit-buffer-allocator",
-                body: testExplicitBufferAllocator
+                name: "borrowed-buffer-tracked-cleanup",
+                body: testBorrowedBufferTrackedCleanup
+            ),
+            .init(
+                name: "owned-buffer-tracked-cleanup",
+                body: testOwnedBufferTrackedCleanup
+            ),
+            .init(
+                name: "unsafe-buffer-handle-helpers",
+                body: testUnsafeBufferHandleHelpers
             ),
             .init(
                 name: "slice-helpers",
@@ -341,7 +349,7 @@ package enum TestAllocators {
         try expect(handle.slice[2] == 15, "read-only view should see third write")
     }
 
-    private static func testExplicitBufferAllocator() throws {
+    private static func testBorrowedBufferTrackedCleanup() throws {
         let owner = DebugAllocator(
             alloc: GenericAllocator(),
             options: .init(
@@ -350,26 +358,95 @@ package enum TestAllocators {
         )
         let allocator = owner.allocator
 
-        let buffer = makeBuffer(
-            count: 4,
-            allocator: allocator,
-            initial: { index in
-                index * 3
-            }
-        )
+        do {
+            let buffer = makeBuffer(
+                count: 4,
+                allocator: allocator,
+                initial: { index in
+                    index * 3
+                }
+            )
 
-        try expect(buffer.slice[0] == 0, "explicit buffer allocator should initialize first value")
-        try expect(buffer.slice[3] == 9, "explicit buffer allocator should initialize final value")
-        try expect(owner.inspector.leaks(), "buffer allocation should be tracked")
-
-        destroyBuffer(
-            buffer,
-            allocator: allocator
-        )
+            try expect(
+                buffer[0] == 0,
+                "borrowed buffer should initialize first value"
+            )
+            try expect(
+                buffer[3] == 9,
+                "borrowed buffer should initialize final value"
+            )
+            try expect(
+                owner.inspector.leaks(),
+                "borrowed buffer allocation should be tracked while live"
+            )
+        }
 
         try expect(
             !owner.inspector.leaks(),
-            "destroyBuffer should release through the supplied allocator"
+            "borrowed buffer deinit should clear through its captured allocator"
+        )
+    }
+
+    private static func testOwnedBufferTrackedCleanup() throws {
+        let owner = DebugAllocator(
+            alloc: GenericAllocator(),
+            options: .init(
+                reportLeaksOnDeinit: false
+            )
+        )
+
+        do {
+            let buffer = makeOwnedBuffer(
+                count: 3,
+                allocator: owner.allocator,
+                initial: { index in
+                    index + 10
+                }
+            )
+
+            try expect(
+                buffer[0] == 10,
+                "owned buffer should initialize first value"
+            )
+            try expect(
+                buffer[2] == 12,
+                "owned buffer should initialize final value"
+            )
+            try expect(
+                owner.inspector.leaks(),
+                "owned buffer allocation should be tracked while live"
+            )
+        }
+
+        try expect(
+            !owner.inspector.leaks(),
+            "owned buffer deinit should clear through its stored allocator"
+        )
+    }
+
+    private static func testUnsafeBufferHandleHelpers() throws {
+        let allocator = GenericAllocator()
+
+        let handle = makeUnsafeBufferHandle(
+            count: 3,
+            allocator: allocator,
+            initial: { index in
+                index * 4
+            }
+        )
+
+        try expect(
+            handle.slice[0] == 0,
+            "unsafe handle helper should initialize first value"
+        )
+        try expect(
+            handle.slice[2] == 8,
+            "unsafe handle helper should initialize final value"
+        )
+
+        destroyUnsafeBufferHandle(
+            handle,
+            allocator: allocator
         )
     }
 

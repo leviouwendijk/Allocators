@@ -1,31 +1,44 @@
 import Foundation
 
-/// A non-owning handle to manually managed storage.
+/// An explicitly unsafe, non-owning handle to manually managed storage.
 ///
-/// `BufferHandle` does not allocate or free memory by itself.
-/// It simply carries a base pointer and a count. 
+/// `BufferHandle` is deliberately escapable and carries no allocator lifetime
+/// dependency. It is the low-level `{ pointer, count }` representation for
+/// callers that intentionally want manual lifetime control or C/Zig-style
+/// interoperability.
 ///
-/// The idea is to match the spirit of a Zig slice `{ ptr, len }` or a
-/// C-style `{ T *ptr; size_t count; }` pair.
+/// Prefer `BorrowedBuffer` when storage belongs to a scoped allocation domain,
+/// or `OwnedBuffer` when the buffer itself should manage allocation cleanup.
+/// A `BufferHandle` may outlive the storage it addresses; correctness is the
+/// caller's responsibility.
 public struct BufferHandle<Element> {
     public var ptr: UnsafeMutablePointer<Element>
     public var count: Int
 
     @inlinable
-    public init(ptr: UnsafeMutablePointer<Element>, count: Int) {
+    public init(
+        ptr: UnsafeMutablePointer<Element>,
+        count: Int
+    ) {
         self.ptr = ptr
         self.count = count
     }
 
-    /// A mutable, non-owning view of the buffer as an `UnsafeMutableBufferPointer`.
+    /// A mutable unsafe view of the same storage.
     @inlinable
     public var mutableSlice: UnsafeMutableBufferPointer<Element> {
-        UnsafeMutableBufferPointer(start: ptr, count: count)
+        UnsafeMutableBufferPointer(
+            start: ptr,
+            count: count
+        )
     }
 
-    /// A read-only, non-owning view of the buffer as an `UnsafeBufferPointer`.
+    /// A read-only unsafe view of the same storage.
     @inlinable
     public var slice: UnsafeBufferPointer<Element> {
-        UnsafeBufferPointer(start: ptr, count: count)
+        UnsafeBufferPointer(
+            start: ptr,
+            count: count
+        )
     }
 }

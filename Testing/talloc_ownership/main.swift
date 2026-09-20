@@ -243,6 +243,60 @@ private func runOwnershipTests(
                 )
             }
         ),
+        .init(
+            name: "borrowed-buffer-positive",
+            body: {
+                try expectFixture(
+                    "borrowed-buffer-positive.swift",
+                    compiles: true
+                )
+            }
+        ),
+        .init(
+            name: "borrowed-buffer-cannot-escape",
+            body: {
+                try expectFixture(
+                    "borrowed-buffer-cannot-escape.swift",
+                    compiles: false
+                )
+            }
+        ),
+        .init(
+            name: "borrowed-buffer-cannot-enter-array",
+            body: {
+                try expectFixture(
+                    "borrowed-buffer-cannot-enter-array.swift",
+                    compiles: false
+                )
+            }
+        ),
+        .init(
+            name: "owned-buffer-escapes-positive",
+            body: {
+                try expectFixture(
+                    "owned-buffer-escapes-positive.swift",
+                    compiles: true
+                )
+            }
+        ),
+        .init(
+            name: "bump-handle-cannot-own-buffer",
+            body: {
+                try expectFixture(
+                    "bump-handle-cannot-own-buffer.swift",
+                    compiles: false
+                )
+            }
+        ),
+        .init(
+            name: "unsafe-buffer-handle-escapes-positive",
+            body: {
+                try expectFixture(
+                    "unsafe-buffer-handle-escapes-positive.swift",
+                    compiles: true
+                )
+            }
+        ),
     ]
 
     var failures: [String] = []
