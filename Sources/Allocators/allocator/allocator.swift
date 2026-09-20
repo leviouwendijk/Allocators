@@ -1,9 +1,8 @@
-/// A lightweight, copyable capability for obtaining and releasing storage.
+/// A lightweight allocation capability.
 ///
-/// Resource-owning allocator implementations should not place ownership in
-/// conforming values. Instead, an owning type may be `~Copyable` and vend a
-/// copyable allocator handle conforming to this protocol.
-public protocol Allocator {
+/// Allocators may be ordinary escapable values or lifetime-bound nonescapable
+/// views. Resource ownership belongs to the type that vends the capability.
+public protocol Allocator: ~Escapable {
     func allocate<T>(
         _ type: T.Type,
         capacity: Int
@@ -26,10 +25,6 @@ public protocol Allocator {
 
 /// An allocator capability that is explicitly safe to pass across concurrency
 /// domains.
-///
-/// Concurrency safety is intentionally separate from `Allocator`: local arena
-/// and bump allocator handles need not pay for synchronization merely to
-/// satisfy the allocation contract.
 public protocol ConcurrentAllocator: Allocator, Sendable {}
 
 public extension Allocator {

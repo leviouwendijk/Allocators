@@ -21,10 +21,18 @@ let package = Package(
             name: "talloc_buffer",
             targets: ["talloc_buffer"]
         ),
+        .executable(
+            name: "talloc_ownership",
+            targets: ["talloc_ownership"]
+        ),
     ],
     targets: [
         .target(
-            name: "Allocators"
+            name: "Allocators",
+            swiftSettings: [
+                .enableExperimentalFeature("LifetimeDependence"),
+                .enableExperimentalFeature("Lifetimes"),
+            ]
         ),
         .target(
             name: "TestAllocators",
@@ -53,6 +61,13 @@ let package = Package(
                 "TestAllocators",
             ],
             path: "Testing/talloc_buffer"
+        ),
+        .executableTarget(
+            name: "talloc_ownership",
+            dependencies: [
+                "Allocators",
+            ],
+            path: "Testing/talloc_ownership"
         ),
     ]
 )

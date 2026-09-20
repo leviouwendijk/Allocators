@@ -415,3 +415,4 @@ package enum TestAllocators {
         try expect(mutable[3] == 8, "fourth value should double")
     }
 }
+

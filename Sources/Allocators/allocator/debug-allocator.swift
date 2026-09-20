@@ -8,7 +8,7 @@ public struct DebugAllocator<Alloc: Allocator>: ~Copyable, MemoryInspecting {
     private let tracker: AllocationTracker
 
     public init(
-        alloc: Alloc,
+        alloc: consuming Alloc,
         options: AllocationTracker.Options = .init()
     ) {
         self.alloc = alloc
