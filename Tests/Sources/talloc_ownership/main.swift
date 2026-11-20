@@ -96,7 +96,7 @@ private func runCompiler(
     fixture: String
 ) throws -> CompilerResult {
     let fixtureURL = packageRoot
-        .appendingPathComponent("Testing", isDirectory: true)
+        .appendingPathComponent("Fixtures", isDirectory: true)
         .appendingPathComponent("OwnershipFixtures", isDirectory: true)
         .appendingPathComponent(fixture)
 
